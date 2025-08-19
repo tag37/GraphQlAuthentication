@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 var azureAdConfig = builder.Configuration.GetSection("AzureAd");
@@ -37,7 +39,8 @@ builder.Services.AddAuthentication(options =>
 
     options.TokenValidationParameters.NameClaimType = "name";
     options.TokenValidationParameters.ValidateIssuer = true;
-});
+})
+.AddMicrosoftIdentityWebApi(azureAdConfig);
 //builder.Services.AddAuthorization();
 builder.Services.AddAuthorization(options =>
 {
@@ -61,7 +64,10 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGraphQL().RequireAuthorization();
+app.MapGraphQL().RequireAuthorization(new AuthorizeAttribute
+{
+    AuthenticationSchemes = "OpenIdConnect,Bearer"
+});
 
 //app.MapGet("/", async context =>
 //{
