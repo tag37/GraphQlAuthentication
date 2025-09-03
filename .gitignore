@@ -4,3 +4,5 @@
 
 /.vs/GraphQLUserApi
 /GraphQLUserApi/obj
+/.vs/ProjectEvaluation
+/GraphQLUserApi/bin/Debug/net8.0

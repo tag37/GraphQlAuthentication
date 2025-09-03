@@ -1,26 +1,25 @@
 ﻿using GraphQLUserApi.Data;
 using GraphQLUserApi.GraphQL;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.Identity.Web;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 var azureAdConfig = builder.Configuration.GetSection("AzureAd");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseInMemoryDatabase("UserDb"));
 builder.Services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
+
+//builder.Services.AddMicrosoftIdentityWebApiAuthentication(azureAdConfig, "AzureAd", "Bearer");
+
 builder.Services.AddAuthentication(options =>
 {
-    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+    options.DefaultScheme = "DualScheme";
+    //options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
 })
 .AddCookie("Cookies", options =>
 {
-    options.ExpireTimeSpan = TimeSpan.FromMinutes(5); // Cookie expiration time
+    options.ExpireTimeSpan = TimeSpan.FromMinutes(60); // Cookie expiration time
 })
 .AddOpenIdConnect("OpenIdConnect", options =>
 {
@@ -39,18 +38,60 @@ builder.Services.AddAuthentication(options =>
 
     options.TokenValidationParameters.NameClaimType = "name";
     options.TokenValidationParameters.ValidateIssuer = true;
+
+    options.Events.OnTokenValidated = context =>
+    {
+        Console.WriteLine($"Token Received and validated {context.TokenEndpointResponse.AccessToken}");
+        return Task.CompletedTask;
+    };
 })
-.AddMicrosoftIdentityWebApi(azureAdConfig);
-//builder.Services.AddAuthorization();
+.AddJwtBearer("Bearer", options =>
+{
+    options.Authority = $"{azureAdConfig["Authority"]}";
+    options.Audience = azureAdConfig["ClientId"];
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidIssuer = $"{azureAdConfig["Authority"]}",
+        ValidateAudience = true,
+        ValidateLifetime = true
+    };
+
+    options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+    {
+        OnAuthenticationFailed = context =>
+        {
+            // Log authentication failures
+            Console.WriteLine($"JWT Authentication failed: {context.Exception.Message}");
+            return Task.CompletedTask;
+        }
+    };
+})
+.AddPolicyScheme("DualScheme", "DualScheme", options =>
+{
+    options.ForwardDefaultSelector = context =>
+    {
+        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+        return authHeader?.StartsWith("Bearer ") == true ? "Bearer" : "Cookies";
+    };
+
+    options.ForwardChallenge = "DualChallengeHandler";
+})
+.AddPolicyScheme("DualChallengeHandler", "DualChallengeHandler", options =>
+{
+    options.ForwardDefaultSelector = context =>
+    {
+        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+        return authHeader?.StartsWith("Bearer ") == true ? "Bearer" : "OpenIdConnect";
+    };
+});
+
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("HumanOnly", policy =>
-        policy.AddAuthenticationSchemes("OpenIdConnect")
-              .RequireAuthenticatedUser());
-
-    options.AddPolicy("ServiceOnly", policy =>
-        policy.AddAuthenticationSchemes("Bearer")
-              .RequireAuthenticatedUser());
+    options.AddPolicy("Authenticated", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+    });
 });
 
 
@@ -62,39 +103,15 @@ builder.Services
 var app = builder.Build();
 
 app.UseAuthentication();
+
 app.UseAuthorization();
 
-app.MapGraphQL().RequireAuthorization(new AuthorizeAttribute
+app.MapGraphQL().RequireAuthorization("Authenticated");
+
+app.Use(async (context, next) =>
 {
-    AuthenticationSchemes = "OpenIdConnect,Bearer"
+    Console.WriteLine($"{context.Request.Path}");
+    await next();
 });
-
-//app.MapGet("/", async context =>
-//{
-//    if (!context.User.Identity?.IsAuthenticated ?? true)
-//    {
-//        // If not authenticated → challenge (redirect to Microsoft login popup)
-//        await context.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme);
-//        return;
-//    }
-
-//    // If authenticated → show user info
-//    var name = context.User.Identity?.Name ?? "Unknown";
-//    await context.Response.WriteAsync($"Hello, {name}. You are logged in!");
-//});
-
-// built-in enforcement
-
-//app.Use(async (context, next) =>
-//{
-//    if (!context.User.Identity?.IsAuthenticated ?? true)
-//    {
-//        // Challenge for login
-//        await context.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme);
-//        return;
-//    }
-//    await next();
-//});
-
 
 app.Run();
